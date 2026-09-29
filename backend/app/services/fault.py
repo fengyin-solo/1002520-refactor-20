@@ -1,14 +1,19 @@
-"""信号故障业务规则：状态流转、字段校验与筛选口径都收在这里。"""
+"""信号故障业务规则：状态流转、字段校验与筛选口径都收在这里。
+
+列表、详情、导出三个入口的字段映射、状态判断与恢复时间统一走
+``app.services.fault_caliber``，不再各自维护一套取值逻辑。
+"""
 from __future__ import annotations
 
 from typing import Any
 
+from app.services import fault_caliber as caliber
 from app.store import store
 
 MODULE = "fault"
 REQUIRED_FIELDS = ["故障编号", "发生时间", "故障设备"]
-STATUS_ORDER = ["待确认", "已确认", "处理中", "已恢复"]
-ACTION_RULES = {"确认故障": "已确认", "开始处理": "处理中", "确认恢复": "已恢复"}
+STATUS_ORDER = caliber.STATUS_ORDER
+ACTION_RULES = caliber.ACTION_RULES
 NEGATIVE_ACTIONS = []
 
 
@@ -25,13 +30,18 @@ class FaultService:
         if keyword:
             rows = [row for row in rows if keyword in str(row.get("故障编号", ""))]
         if status:
-            rows = [row for row in rows if row.get("status") == status]
+            # 状态判断走统一口径，历史缺 status 的老记录也能按推断状态被筛中。
+            rows = [row for row in rows if caliber.resolve_status(row) == status]
         total = len(rows)
         start = max(page - 1, 0) * size
-        return rows[start:start + size], total
+        page_rows = [caliber.present_row(row) for row in rows[start:start + size]]
+        return page_rows, total
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
-        return store.find(MODULE, entry_id)
+        row = store.find(MODULE, entry_id)
+        if row is None:
+            return None
+        return caliber.present_row(row)
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
