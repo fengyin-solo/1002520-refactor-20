@@ -1,4 +1,8 @@
-"""信号故障接口：维护故障记录，覆盖确认故障、开始处理、确认恢复等动作。"""
+"""信号故障接口：维护故障记录，覆盖确认故障、开始处理、确认恢复等动作。
+
+列表、详情、导出的取值口径统一由 ``FaultService`` 走 ``fault_caliber``，
+本层不再重复定义字段与状态判断。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -7,13 +11,11 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
 from app.services.fault import FaultService
+from app.services.fault_caliber import CANONICAL_FIELDS as LIST_FIELDS, STATUS_ORDER as STATUSES
 
 router = APIRouter(prefix="/api/fault", tags=["信号故障"])
 
 service = FaultService()
-
-LIST_FIELDS = ["故障编号", "发生时间", "故障设备", "故障现象", "影响范围", "恢复时间", "处理人员", "故障状态"]
-STATUSES = ["待确认", "已确认", "处理中", "已恢复"]
 
 
 @router.get("", response_model=PageResult[dict])
@@ -28,6 +30,14 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+# 固定路径必须排在 /{entry_id} 之前，否则 export 会被当成 entry_id 解析而报 422。
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出信号故障清单：与列表同一套口径、同一份全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "fault", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +66,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出信号故障清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "fault", "total": total, "items": items}

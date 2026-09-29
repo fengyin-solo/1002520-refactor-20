@@ -1,13 +1,21 @@
-"""信号故障业务规则：状态流转、字段校验与筛选口径都收在这里。"""
+"""信号故障业务规则：状态流转、字段校验与筛选口径都收在这里。
+
+列表、详情、导出的取值统一走 ``fault_caliber``，三个入口不再各写一遍。
+"""
 from __future__ import annotations
 
 from typing import Any
 
 from app.store import store
 
+from app.services.fault_caliber import (
+    STATUS_ORDER,
+    normalize_entry,
+    normalize_status,
+)
+
 MODULE = "fault"
 REQUIRED_FIELDS = ["故障编号", "发生时间", "故障设备"]
-STATUS_ORDER = ["待确认", "已确认", "处理中", "已恢复"]
 ACTION_RULES = {"确认故障": "已确认", "开始处理": "处理中", "确认恢复": "已恢复"}
 NEGATIVE_ACTIONS = []
 
@@ -21,17 +29,21 @@ class FaultService:
         page: int = 1,
         size: int = 20,
     ) -> tuple[list[dict[str, Any]], int]:
-        rows = store.rows(MODULE)
+        # 先按统一口径归一化，再过滤/分页：旧字段名、旧状态写法的历史行
+        # 也能按新口径被检索与筛选，且三个入口的影响范围等字段完全一致。
+        rows = [normalize_entry(row) for row in store.rows(MODULE)]
         if keyword:
-            rows = [row for row in rows if keyword in str(row.get("故障编号", ""))]
+            rows = [row for row in rows if keyword in str(row.get("故障编号") or "")]
         if status:
-            rows = [row for row in rows if row.get("status") == status]
+            target = normalize_status(status) or status
+            rows = [row for row in rows if row.get("status") == target]
         total = len(rows)
         start = max(page - 1, 0) * size
         return rows[start:start + size], total
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
-        return store.find(MODULE, entry_id)
+        row = store.find(MODULE, entry_id)
+        return normalize_entry(row) if row is not None else None
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
